@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF to Excel Converter</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+
+    <h2>Convert PDF Table to Excel</h2>
+    <input type="file" id="pdf-file" accept=".pdf" />
+    <button id="convert-btn" disabled>Convert to Excel</button>
+    <p id="status"></p>
+
+    <script>
+        // Configure PDF.js Worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+        const fileInput = document.getElementById('pdf-file');
+        const convertBtn = document.getElementById('convert-btn');
+        const statusText = document.getElementById('status');
+        let pdfData = null;
+
+        // Enable button when file is loaded
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                pdfData = new Uint8Array(event.target.result);
+                convertBtn.disabled = false;
+                statusText.innerText = "PDF loaded. Ready to convert.";
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        convertBtn.addEventListener('click', async () => {
+            if (!pdfData) return;
+            statusText.innerText = "Processing PDF...";
+
+            try {
+                // 1. Load the PDF document
+                const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+                let allRows = [];
+
+                // 2. Loop through each page
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const textContent = await page.getTextContent();
+                    
+                    // Group items by their vertical layout (Y coordinate)
+                    const items = textContent.items;
+                    let rowsMap = {};
+
+                    items.forEach(item => {
+                        // item.transform[5] is the Y-coordinate (vertical baseline)
+                        // Rounding helps group text on the exact same line
+                        const y = Math.round(item.transform[5]); 
+                        const x = item.transform[4]; // X-coordinate (horizontal)
+
+                        if (!rowsMap[y]) {
+                            rowsMap[y] = [];
+                        }
+                        rowsMap[y].push({ text: item.str, x: x });
+                    });
+
+                    // Sort rows from top of the page to the bottom (PDF Y goes up, so sort descending)
+                    const sortedY = Object.keys(rowsMap).sort((a, b) => b - a);
+
+                    sortedY.forEach(y => {
+                        // Sort items in the same row from left to right (X ascending)
+                        const rowItems = rowsMap[y].sort((a, b) => a.x - b.x);
+                        const rowData = rowItems.map(item => item.text.trim()).filter(text => text !== "");
+                        
+                        if (rowData.length > 0) {
+                            allRows.push(rowData);
+                        }
+                    });
+                }
+
+                // 3. Create Excel Sheet using SheetJS
+                const worksheet = XLSX.utils.aoa_to_sheet(allRows);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, "PDF Data");
+
+                // 4. Trigger download
+                XLSX.writeFile(workbook, "converted_data.xlsx");
+                statusText.innerText = "Conversion successful! File downloaded.";
+
+            } catch (error) {
+                console.error(error);
+                statusText.innerText = "Error parsing PDF. Make sure it's a text-based PDF.";
+            }
+        });
+    </script>
+</body>
+</html>
